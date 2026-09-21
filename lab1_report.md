@@ -110,31 +110,43 @@ Quantization introduces error when floating-point weights are mapped to a limite
 
 ### 4.2 Quantization results for Qwen2.5-0.5B-Instruct
 
-| Quantization | Effective/nominal precision | GGUF size (MiB) | Peak RSS (MiB) | Speed (token/s) | ARC-Easy (%) | HellaSwag (%) | IFEval (%) |
+| Quantization | Effective/nominal precision | GGUF size (reported MB) | Peak RSS (MiB) | Speed (token/s) | ARC-Easy (%) | HellaSwag (%) | IFEval (%) |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| Q8_0 | 8-bit blocks (8.5 bpw including scale) | 644.4 | `[FILL]` | 5.77 | 63.69 | 34.89 | 60.00 |
-| `[FILL: e.g. Q5_K_M]` | `[FILL]` | `[FILL]` | `[FILL]` | `[FILL]` | `[FILL]` | `[FILL]` | `[FILL]` |
-| `[FILL: e.g. Q4_K_M]` | `[FILL]` | `[FILL]` | `[FILL]` | `[FILL]` | `[FILL]` | `[FILL]` | `[FILL]` |
+| Q8_0 | 8-bit blocks (8.5 bpw including scale) | 676 | `[FILL]` | 5.77 | 63.69 | 34.89 | 60.00 |
+| Q5_K_M | Mixed K-quant, approximately 5-bit weights | 522 | 1004.3 | 5.09 | 62.23 | 32.96 | 70.00 |
+| Q4_K_M | Mixed K-quant, approximately 4-bit weights | 491 | 977.6 | 5.14 | 60.97 | 32.35 | 85.00 |
 
-Replace the labels and zeros below with the three tested quantizations and measured values.
+The Q5_K_M and Q4_K_M files were approximately 22.8% and 27.4% smaller than Q8_0. Q4_K_M used 26.7 MiB (2.7%) less peak resident memory than Q5_K_M. The runtime-memory reduction is smaller than the storage reduction because peak RSS also includes the server, KV cache, computation buffers, and other allocations that are not reduced with weight quantization.
+
+The following charts compare speed, overall benchmark score, and model-file size for the three tested quantizations.
 
 ```mermaid
 xychart-beta
     title "Qwen2.5-0.5B Speed by Quantization"
-    x-axis ["Q8_0", "Quant 2", "Quant 3"]
+    x-axis ["Q8_0", "Q5_K_M", "Q4_K_M"]
     y-axis "Tokens per second" 0 --> 10
-    bar [5.77, 0, 0]
+    bar [5.77, 5.09, 5.14]
+```
+
+```mermaid
+xychart-beta
+    title "Qwen2.5-0.5B Overall Score by Quantization"
+    x-axis ["Q8_0", "Q5_K_M", "Q4_K_M"]
+    y-axis "Score (/100)" 0 --> 100
+    bar [51.4, 52.1, 54.3]
 ```
 
 ```mermaid
 xychart-beta
     title "Qwen2.5-0.5B Model Size by Quantization"
-    x-axis ["Q8_0", "Quant 2", "Quant 3"]
-    y-axis "GGUF size (MiB)" 0 --> 700
-    bar [644.4, 0, 0]
+    x-axis ["Q8_0", "Q5_K_M", "Q4_K_M"]
+    y-axis "GGUF size (reported MB)" 0 --> 700
+    bar [676, 522, 491]
 ```
 
-The `[FILL]` format reduced the model file by `[FILL]%` relative to Q8_0 and changed generation speed by `[FILL]%`. Its ARC-Easy, HellaSwag, and IFEval scores changed by `[FILL]`, `[FILL]`, and `[FILL]` percentage points. `[FILL: Explain whether the observed speed/accuracy trend matches the expected storage-versus-error trade-off, and discuss any non-monotonic result.]`
+Q5_K_M and Q4_K_M generated 5.09 and 5.14 token/s, respectively, compared with 5.77 token/s for Q8_0. They were therefore 11.8% and 10.9% slower than Q8_0 in these runs. Q4_K_M was slightly faster than Q5_K_M and used 26.7 MiB less peak resident memory. This non-monotonic result shows that reduced weight size does not guarantee proportionally faster execution: kernel efficiency and unpacking costs also matter on Cortex-A53.
+
+Q5_K_M scored 62.23%, 32.96%, and 70.00% on ARC-Easy, HellaSwag, and IFEval, producing an overall score of 52.1/100. Q4_K_M scored 60.97%, 32.35%, and 85.00%, producing 54.3/100. Relative to Q8_0, both lower-bit formats scored slightly lower on ARC-Easy and HellaSwag but higher on IFEval. The higher aggregate scores do not establish that lower-bit quantization improves accuracy: only ten IFEval prompts were used, every format was run once, and the IFEval differences dominated the aggregate. Repeated runs or a larger task sample would be needed to separate quantization effects from sample variability.
 
 ## 5. GGML Hardware Optimizations on AArch64
 
@@ -196,7 +208,7 @@ These results indicate that performance is primarily limited by `[FILL: computat
 
 ## 7. Conclusions
 
-On the Ultra96, SmolLM2-360M-Instruct was the fastest tested model at 7.01 token/s but had the lowest overall score, 22.8/100. Llama-3.2-1B-Instruct achieved the highest quality score, 58.9/100, but generated only 2.46 token/s. Qwen2.5-0.5B-Instruct occupied the middle ground at 5.77 token/s and 51.4/100. Reducing Qwen's weight precision from Q8_0 to `[FILL]` reduced storage by `[FILL]%` and changed speed and accuracy by `[FILL]`.
+On the Ultra96, SmolLM2-360M-Instruct was the fastest tested model at 7.01 token/s but had the lowest overall score, 22.8/100. Llama-3.2-1B-Instruct achieved the highest quality score, 58.9/100, but generated only 2.46 token/s. Qwen2.5-0.5B-Instruct occupied the middle ground at 5.77 token/s and 51.4/100. For Qwen, Q5_K_M and Q4_K_M reduced decode throughput by 11.8% and 10.9% relative to Q8_0 in the single runs. Q4_K_M used 2.7% less peak RAM than Q5_K_M. The small, non-monotonic score differences do not support a claim that lower precision improved model quality.
 
 The AArch64 experiments showed that `[FILL: optimization result]`. Under the required single-core, 300 MHz profiling configuration, `[FILL: function(s)]` dominated execution. The most promising next steps are therefore `[FILL: one or two optimizations supported by the profiling evidence]`.
 
@@ -210,6 +222,7 @@ The AArch64 experiments showed that `[FILL: optimization result]`. Under the req
 6. P. Clark et al., [Think you have Solved Question Answering? Try ARC, the AI2 Reasoning Challenge](https://arxiv.org/abs/1803.05457), 2018.
 7. R. Zellers et al., [HellaSwag: Can a Machine Really Finish Your Sentence?](https://arxiv.org/abs/1905.07830), 2019.
 8. J. Zhou et al., [Instruction-Following Evaluation for Large Language Models](https://arxiv.org/abs/2311.07911), 2023.
+9. Qwen, [Qwen2.5-0.5B-Instruct GGUF files](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/tree/main).
 
 ## Appendix A. Raw Results
 
@@ -250,7 +263,31 @@ Decode throughput: 2.46 token/s
 ### A.3 Additional quantizations
 
 ```text
-[FILL]
+Model: Qwen2.5-0.5B-Instruct Q4_K_M
+Threads: 4
+HellaSwag: 6.469 / 20 = 32.35% (argmax accuracy 50.0%)
+ARC-Easy: 12.194 / 20 = 60.97% (argmax accuracy 65.0%)
+IFEval: 8.500 / 10 = 85.00% (strict accuracy 70.0%)
+Total: 27.163 / 50 = 54.3 / 100
+Load time: 28.4 s
+Peak RSS: 977.6 MB
+Prefill throughput: 7.78 token/s
+Decode throughput: 5.14 token/s
+TTFT median / p95: 3974.4 / 4679.5 ms
+Wall clock: 634.74 s
+
+Model: Qwen2.5-0.5B-Instruct Q5_K_M
+Threads: 4
+HellaSwag: 6.593 / 20 = 32.96% (argmax accuracy 45.0%)
+ARC-Easy: 12.445 / 20 = 62.23% (argmax accuracy 75.0%)
+IFEval: 7.000 / 10 = 70.00% (strict accuracy 50.0%)
+Total: 26.038 / 50 = 52.1 / 100
+Load time: 31.98 s
+Peak RSS: 1004.3 MB
+Prefill throughput: 7.55 token/s
+Decode throughput: 5.09 token/s
+TTFT median / p95: 4096.4 / 4830.1 ms
+Wall clock: 647.44 s
 ```
 
 ### A.4 `gprof` excerpt
