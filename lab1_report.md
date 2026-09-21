@@ -150,27 +150,37 @@ Q5_K_M scored 62.23%, 32.96%, and 70.00% on ARC-Easy, HellaSwag, and IFEval, pro
 
 ## 5. GGML Hardware Optimizations on AArch64
 
-The Cortex-A53 implements 128-bit Arm NEON SIMD. GGML contains architecture-specific CPU kernels that use NEON vector operations to process several quantized values per instruction. This is especially important for matrix-vector products, which dominate autoregressive token generation. The tested Cortex-A53 implements the Armv8-A baseline and does not provide newer Armv8.2/Armv8.6 features such as dot-product or I8MM instructions; a binary must not be compiled with unsupported instruction-set extensions.
+We evaluated two optimization approaches: multithreading and Cortex-A53-specific compiler tuning. All runs used Qwen2.5-0.5B-Instruct with Q8_0 quantization and the same public benchmark suite: 20 HellaSwag items, 20 ARC-Easy items, and 10 IFEval items.
 
-GGML also distributes tensor operations across worker threads. Increasing `-t` can use multiple Cortex-A53 cores during token generation, while `-tb` controls the batch/prompt-processing thread count. Scaling may be limited by memory bandwidth, synchronization, small matrix sizes, and thermal or frequency constraints. Quantization itself is another hardware-relevant optimization because smaller weight tensors reduce memory traffic and improve cache residency.
+The Cortex-A53 supports 128-bit Arm NEON SIMD, which GGML can use in architecture-specific computation kernels. However, the Cortex-A53 does not support the newer dot-product or I8MM instruction extensions. We therefore used compiler tuning compatible with the Cortex-A53 rather than enabling unsupported instructions.
 
-We evaluated the following configurations using Qwen2.5-0.5B Q8_0 and the same prompt/workload:
+GGML distributes tensor computations across worker threads. The `-t` option specifies the generation thread count, while `-tb` specifies the batch/prompt-processing thread count. Our first comparison increased both settings from one to four.
 
-| Configuration | Active cores | `-t` | `-tb` | Build flags/features | Speed (token/s) | Relative speedup |
+For the second comparison, we rebuilt the same source with `-mtune=cortex-a53`, retaining four threads and `-O3`. This flag tunes compiler code-generation decisions for the Cortex-A53; it is not a switch that newly enables NEON. Both builds used llama.cpp commit `ce8caa6e6`, GNU 11.2.0 targeting Linux AArch64, Release mode, and `BUILD_SHARED_LIBS=OFF`.
+
+The board was configured at approximately 1.2 GHz with all four cores online throughout these experiments. The single-thread baseline limited inference threads without disabling the other cores. Quantization remained Q8_0 in every configuration.
+
+| Configuration | Cores online | `-t` | `-tb` | Build flags/features | Decode speed (token/s) | Relative speedup |
 |---|---:|---:|---:|---|---:|---:|
-| Baseline | 1 | 1 | 1 | `[FILL]` | `[FILL]` | 1.00× |
-| Multi-threaded | 4 | 4 | 4 | `[FILL]` | `[FILL]` | `[FILL]`× |
-| `[FILL: second optimization, e.g. tuned Cortex-A53/NEON build]` | `[FILL]` | `[FILL]` | `[FILL]` | `[FILL]` | `[FILL]` | `[FILL]`× |
+| Single-thread baseline | 4 | 1 | 1 | `-O3`; no explicit CPU-tuning flag | 1.69 | 1.00× |
+| Multithreaded | 4 | 4 | 4 | Same baseline executable, `-O3` | 5.71 | 3.38× |
+| Multithreaded + Cortex-A53 tuning | 4 | 4 | 4 | `-O3 -mtune=cortex-a53` for C and C++ | 5.76 | 3.41× |
+
+Relative speedups in the table use the single-thread baseline as the reference.
 
 ```mermaid
 xychart-beta
-    title "Effect of AArch64/GGML Optimizations"
-    x-axis ["1 thread", "4 threads", "Optimization 2"]
-    y-axis "Tokens per second" 0 --> 1
-    bar [0, 0, 0]
+    title "Effect of Threading and Cortex-A53 Tuning"
+    x-axis ["1 thread", "4 threads", "4 threads + A53 tuning"]
+    y-axis "Decode tokens per second" 0 --> 6
+    bar [1.69, 5.71, 5.76]
 ```
 
-Moving from one to four threads changed throughput from `[FILL]` to `[FILL]` token/s, a speedup of `[FILL]`× and a parallel efficiency of `[FILL]%`. `[FILL: Explain why the speedup is or is not close to 4×.]` The second optimization changed throughput by `[FILL]%`. `[FILL: Connect the result to NEON use, compiler code generation, memory bandwidth, cache behavior, or kernel support.]`
+Moving from one to four threads increased decode throughput from **1.69 to 5.71 token/s**, a speedup of **3.38×**. Parallel efficiency was approximately **84.5%**, calculated as `(5.71 / 1.69) / 4 × 100`. This indicates substantial benefit from distributing inference computations across the four cores. Scaling remained below the ideal 4×; possible contributors include serial work, thread synchronization, and contention for shared memory resources. These throughput measurements alone do not establish which factor dominates.
+
+Adding Cortex-A53 compiler tuning increased decode throughput from **5.71 to 5.76 token/s**, an additional **0.88%** over the untuned four-thread build. Both builds already used `-O3`, and architecture-specific kernels can leave relatively little work for additional compiler tuning to improve. The small observed gain is consistent with that possibility, but does not prove a particular instruction-scheduling, cache, or memory-bandwidth explanation. Because each configuration was measured once, the difference should be treated as an observed improvement rather than a demonstrated repeatable speedup.
+
+Prefill throughput increased from **2.48 token/s** with one thread to **9.72 token/s** with four threads, and then to **9.84 token/s** with A53 tuning. All three runs reported the same **51.4% overall quality score**, processed **3,525 prompt tokens**, and generated **862 tokens**. Thus, the measured performance changes occurred without a change in the reported benchmark quality.
 
 ## 6. Profiling Qwen2.5-0.5B Q8_0
 
