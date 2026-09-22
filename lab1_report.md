@@ -186,35 +186,41 @@ Prefill throughput increased from **2.48 token/s** with one thread to **9.72 tok
 
 ### 6.1 Method
 
-Profiling used the lab's required target configuration: one active Cortex-A53 core at approximately 300 MHz. Qwen2.5-0.5B-Instruct Q8_0 ran single-threaded with the prompt “Describe a system-on-chip in two sentences.” The executable was instrumented with `-pg`, and the resulting `gmon.out` was analyzed with `gprof`.
+Profiling used the lab's required target configuration: one active Cortex-A53 core at approximately 300 MHz. Qwen2.5-0.5B-Instruct Q8_0 ran single-threaded with the prompt “Describe a system-on-chip in two sentences.” The executable was compiled in Release mode with `-O3` and instrumented with `-pg`. The resulting `gmon.out` was analyzed using the matching AArch64 `gprof` tool and the exact executable that generated the profile.
 
-The flat profile's **self time** estimates time spent inside a function itself, while **cumulative time** also reflects the calling sequence. Because `gprof` is sampling/instrumentation based, very short functions, inlined functions, and time attributed through optimized kernels may not be represented perfectly.
+The flat profile's **self time** estimates the time spent directly inside each function. In the flat profile, **cumulative time** is the running sum of self time as functions are listed in descending order; it does not represent inclusive caller/callee time. Because `gprof` uses sampling and instrumentation, very short functions, inlined functions, and time attributed through optimized kernels may not be represented perfectly. Each sample in this profile represented 0.01 seconds.
+
+The profiled run produced approximately **0.6 prompt tokens/s** and **0.4 generated tokens/s** under the one-core, approximately 300 MHz configuration.
 
 ### 6.2 Profiling results
 
-Copy the leading rows from the `gprof` flat profile. Preserve the exact symbol names.
+The five functions with the highest measured self time were:
 
 | Rank | Function | Self time (%) | Cumulative time (%) | Calls | Interpretation |
 |---:|---|---:|---:|---:|---|
-| 1 | `[FILL]` | `[FILL]` | `[FILL]` | `[FILL]` | `[FILL]` |
-| 2 | `[FILL]` | `[FILL]` | `[FILL]` | `[FILL]` | `[FILL]` |
-| 3 | `[FILL]` | `[FILL]` | `[FILL]` | `[FILL]` | `[FILL]` |
-| 4 | `[FILL]` | `[FILL]` | `[FILL]` | `[FILL]` | `[FILL]` |
-| 5 | `[FILL]` | `[FILL]` | `[FILL]` | `[FILL]` | `[FILL]` |
-
-Replace the labels and values below with the five highest self-time functions.
+| 1 | `ggml_vec_dot_q8_0_q8_0` | 90.52 | 90.52 | 34,543,360 | Computes dot products between Q8_0 quantized vectors |
+| 2 | `ggml_compute_forward_mul_mat` | 1.27 | 91.79 | 50 | Coordinates forward matrix-multiplication operations |
+| 3 | `ggml_compute_forward_flash_attn_ext` | 1.19 | 92.98 | 1,200 | Computes the fused attention operation |
+| 4 | `llama_vocab::impl::load(llama_model_loader&, LLM_KV const&)` | 0.73 | 93.71 | 3 | Loads and initializes model vocabulary data |
+| 5 | `std::_Hashtable<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, std::pair<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const, unsigned char>, std::allocator<std::pair<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const, unsigned char> >, std::__detail::_Select1st, std::equal_to<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::hash<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits<true, false, true> >::find(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)` | 0.56 | 94.27 | 3,087,507 | Performs hash-table lookups used during vocabulary processing |
 
 ```mermaid
 xychart-beta
     title "Top Functions by gprof Self Time"
-    x-axis ["Function 1", "Function 2", "Function 3", "Function 4", "Function 5"]
+    x-axis ["Q8 dot", "Matrix multiply", "Flash attention", "Vocabulary load", "Hash lookup"]
     y-axis "Self time (%)" 0 --> 100
-    bar [0, 0, 0, 0, 0]
+    bar [90.52, 1.27, 1.19, 0.73, 0.56]
 ```
 
-The dominant bottleneck was `[FILL: function/kernel]`, accounting for `[FILL]%` of self time. This function performs `[FILL: matrix-vector multiplication, dequantization/dot products, attention, sampling, etc.]`. The next largest costs were `[FILL]`. Together, the top `[FILL]` functions accounted for `[FILL]%` of sampled self time.
+The dominant bottleneck was `ggml_vec_dot_q8_0_q8_0`, accounting for **90.52%** of measured self time. This kernel computes dot products between Q8_0 vectors by multiplying corresponding quantized values and accumulating their products. These dot products are repeatedly used within the matrix-vector and matrix-multiplication operations that implement the model's neural-network layers.
 
-These results indicate that performance is primarily limited by `[FILL: computation, memory movement, quantized dot products, or another evidenced cause]`. A suitable optimization would be `[FILL]` because `[FILL: tie the proposal directly to measured functions]`. A second opportunity is `[FILL]`. The profile does not by itself prove `[FILL: e.g. memory-bandwidth saturation]`; confirming that claim would require hardware performance counters or controlled scaling measurements.
+The next largest direct costs were `ggml_compute_forward_mul_mat` at **1.27%** and `ggml_compute_forward_flash_attn_ext` at **1.19%**. Vocabulary loading and hash-table lookup accounted for **0.73%** and **0.56%**, respectively. Together, the five leading functions accounted for **94.27%** of sampled self time.
+
+These results indicate that execution time is concentrated overwhelmingly in the **Q8_0 quantized dot-product kernel**. A suitable optimization or hardware-acceleration target would therefore be a Q8_0 dot-product unit that reads quantized vector blocks, multiplies their signed 8-bit values, accumulates the products, and applies the associated block scaling factors. Accelerating this kernel could affect a much larger fraction of execution time than optimizing a low-ranked function.
+
+A second opportunity is to improve the software implementation of the Q8_0 kernel through more efficient NEON vectorization, instruction scheduling, loop unrolling, or data access organization compatible with the Cortex-A53. The matrix-multiplication and attention paths are additional candidates, but their low flat-profile self times partly reflect that they invoke lower-level kernels where much of the actual work occurs.
+
+The profile demonstrates that Q8_0 dot-product processing is the dominant software hotspot, but it does not by itself prove whether the kernel is limited primarily by arithmetic throughput, cache behavior, or external-memory bandwidth. Confirming a specific hardware-level cause would require performance counters or controlled experiments that vary factors such as CPU frequency, memory behavior, or working-set size.
 
 ## 7. Conclusions
 
